@@ -1,5 +1,6 @@
 import asyncio
 import os
+import asyncio
 from pathlib import Path
 from array import array
 from collections import deque
@@ -31,11 +32,9 @@ Path(SESSION_PATH).parent.mkdir(parents=True, exist_ok=True)
 
 # The user account joins/records VC calls. The bot account is only the controller.
 if SESSION_STRING:
-    user = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
-else:
-    user = TelegramClient(SESSION_PATH, API_ID, API_HASH)
-bot = TelegramClient(None, API_ID, API_HASH)
-call = PyTgCalls(user)
+    user = None
+bot = None
+call = None
 
 allowed = {OWNER_ID}
 relay = {}
@@ -54,9 +53,9 @@ fx = {
 }
 
 # Waiting queues make first-login OTP/2FA work without stdin on Railway.
-phone_queue = asyncio.Queue()
-code_queue = asyncio.Queue()
-password_queue = asyncio.Queue()
+phone_queue = None
+code_queue = None
+password_queue = None
 
 
 def is_allowed(event):
@@ -205,14 +204,6 @@ async def auth_user():
     print(f"✅ Telegram user connected: {me.id}", flush=True)
 
 
-@bot.on(events.NewMessage)
-async def admin_cmd(event):
-    if event.sender_id != OWNER_ID:
-        return
-    text = (event.raw_text or "").strip()
-    if text.lower() == PREFIX + "admin":
-        await event.reply(menu())
-@bot.on(events.NewMessage)
 async def controller(event):
     if event.sender_id != OWNER_ID:
         return
@@ -335,14 +326,42 @@ def menu():
 
 
 async def main():
+    global user, bot, call, phone_queue, code_queue, password_queue
+
     print("🔥 TOXIC RELAY • SINGLE PYTHON", flush=True)
+
+    # Create every async client/object INSIDE the loop created by asyncio.run().
+    # This prevents Telethon/PyTgCalls Future objects from being attached to
+    # different asyncio event loops on Railway.
+    if SESSION_STRING:
+        user = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
+    else:
+        user = TelegramClient(SESSION_PATH, API_ID, API_HASH)
+
+    bot = TelegramClient(None, API_ID, API_HASH)
+    call = PyTgCalls(user)
+
+    phone_queue = asyncio.Queue()
+    code_queue = asyncio.Queue()
+    password_queue = asyncio.Queue()
+
+    # Register handlers only after the bot client belongs to the current loop.
+    bot.add_event_handler(controller, events.NewMessage)
+
     await bot.start(bot_token=BOT_TOKEN)
+    print("🟢 Controller bot connected.", flush=True)
+
     await auth_user()
     await call.start()
     call.on_update(tg_filters.stream_frame(Direction.INCOMING, Device.MICROPHONE))(frame_handler)
     print("🟢 Controller + VC engine online", flush=True)
-    await asyncio.gather(bot.run_until_disconnected(), user.run_until_disconnected())
+
+    await asyncio.gather(
+        bot.run_until_disconnected(),
+        user.run_until_disconnected(),
+    )
 
 
 if __name__ == "__main__":
     asyncio.run(main())
+        
